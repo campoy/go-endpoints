@@ -20,6 +20,8 @@ var (
 	typeOfOsError = reflect.TypeOf((*error)(nil)).Elem()
 	// Same as above, this time for http.Request.
 	typeOfRequest = reflect.TypeOf((*http.Request)(nil)).Elem()
+	// Precompute the reflect type for Context.
+	typeOfContext = reflect.TypeOf((*Context)(nil)).Elem()
 )
 
 // ----------------------------------------------------------------------------
@@ -74,6 +76,8 @@ type ServiceInfo struct {
 type ServiceMethod struct {
 	// Type of the request data structure
 	ReqType reflect.Type
+	// first argument of the method is Context
+	wantsContext bool
 	// Type of the response data structure
 	RespType reflect.Type
 	// method's receiver
@@ -182,7 +186,7 @@ func newServiceMethod(m *reflect.Method, internal bool) *ServiceMethod {
 	}
 	// First argument must be a pointer and must be http.Request.
 	reqType := mtype.In(1)
-	if reqType.Kind() != reflect.Ptr || reqType.Elem() != typeOfRequest {
+	if !isRequestOrContext(reqType) {
 		return nil
 	}
 	// Second argument must be a pointer and must be exported.
@@ -204,9 +208,10 @@ func newServiceMethod(m *reflect.Method, internal bool) *ServiceMethod {
 	}
 
 	method := &ServiceMethod{
-		method:   m,
-		ReqType:  args.Elem(),
-		RespType: reply.Elem(),
+		method:       m,
+		wantsContext: reqType.Implements(typeOfContext),
+		ReqType:      args.Elem(),
+		RespType:     reply.Elem(),
 	}
 	if !internal {
 		mname := strings.ToLower(m.Name)
@@ -303,4 +308,12 @@ func isExportedOrBuiltin(t reflect.Type) bool {
 	// PkgPath will be non-empty even for an exported type,
 	// so we need to check the type name as well.
 	return isExported(t.Name()) || t.PkgPath() == ""
+}
+
+// isRequestOrContext returns true if type t is either *http.Request or Context
+func isRequestOrContext(t reflect.Type) bool {
+	if t.Implements(typeOfContext) {
+		return true
+	}
+	return t.Kind() == reflect.Ptr && t.Elem() == typeOfRequest
 }
