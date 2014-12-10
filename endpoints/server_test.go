@@ -77,6 +77,13 @@ func (s *ServerTestService) MsgWithContext(c Context, req, resp *TestMsg) error 
 	return nil
 }
 
+func (s *ServerTestService) MsgWithReturn(c Context, req *TestMsg) (*TestMsg, error) {
+	if c == nil {
+		return nil, errors.New("MsgReturnResp: c = nil")
+	}
+	return &TestMsg{req.Name}, nil
+}
+
 func createAPIServer() *Server {
 	s := &ServerTestService{}
 	rpc := &RPCService{
@@ -86,13 +93,19 @@ func createAPIServer() *Server {
 		methods:  make(map[string]*ServiceMethod),
 	}
 	for i := 0; i < rpc.rcvrType.NumMethod(); i++ {
-		meth := rpc.rcvrType.Method(i)
-		rpc.methods[meth.Name] = &ServiceMethod{
-			method:       &meth,
-			wantsContext: meth.Type.In(1).Implements(typeOfContext),
-			ReqType:      meth.Type.In(2).Elem(),
-			RespType:     meth.Type.In(3).Elem(),
+		m := rpc.rcvrType.Method(i)
+		sm := &ServiceMethod{
+			method:       &m,
+			wantsContext: m.Type.In(1).Implements(typeOfContext),
+			ReqType:      m.Type.In(2).Elem(),
 		}
+		if m.Type.NumOut() == 2 {
+			sm.returnsResp = true
+			sm.RespType = m.Type.Out(0).Elem()
+		} else {
+			sm.RespType = m.Type.In(3).Elem()
+		}
+		rpc.methods[m.Name] = sm
 	}
 
 	smap := &serviceMap{services: make(map[string]*RPCService)}
@@ -180,6 +193,7 @@ func TestServerMethodCall(t *testing.T) {
 	}{
 		{"MsgWithRequest", `{"name":"request"}`},
 		{"MsgWithContext", `{"name":"context"}`},
+		{"MsgWithReturn", `{"name":"return"}`},
 	}
 
 	for i, tt := range tts {
@@ -213,17 +227,23 @@ func TestServerRegisterService(t *testing.T) {
 	tts := []struct {
 		name         string
 		wantsContext bool
+		returnsResp  bool
 	}{
-		{"MsgWithRequest", false},
-		{"MsgWithContext", true},
+		{"MsgWithRequest", false, false},
+		{"MsgWithContext", true, false},
+		{"MsgWithReturn", true, true},
 	}
 	for i, tt := range tts {
 		m := s.MethodByName(tt.name)
 		if m == nil {
 			t.Errorf("%d: MethodByName(%q) = nil", i, tt.name)
+			continue
 		}
 		if m.wantsContext != tt.wantsContext {
 			t.Errorf("%d: wantsContext = %v; want %v", i, m.wantsContext, tt.wantsContext)
+		}
+		if m.returnsResp != tt.returnsResp {
+			t.Errorf("%d: returnsResp = %v; want %v", i, m.returnsResp, tt.returnsResp)
 		}
 	}
 }

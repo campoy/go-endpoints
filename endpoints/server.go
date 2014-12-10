@@ -45,10 +45,14 @@ func NewServer(root string) *Server {
 //    - The receiver is exported (begins with an upper case letter) or local
 //      (defined in the package registering the service).
 //    - The method name is exported.
-//    - The method has three arguments: *http.Request, *args, *reply.
-//    - All three arguments are pointers.
-//    - The second and third arguments are exported or local.
-//    - The method has return type error.
+//    - The method has either 2 arguments and 2 return values:
+//      *http.Request|Context, *arg => *reply, error
+//      or 3 arguments and 1 return value:
+//      *http.Request|Context, *arg, *reply => error
+//    - The first argument is either *http.Request or Context.
+//    - Second argument (*arg) and *reply are exported or local.
+//    - First argument, *arg and *reply are all pointers.
+//    - First (or second, if method has 2 arguments) return value is of type error.
 //
 // All other methods are ignored.
 func (s *Server) RegisterService(srv interface{}, name, ver, desc string, isDefault bool) (*RPCService, error) {
@@ -129,10 +133,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Initialize RPC method response and call method's function
-	resp := reflect.New(methodSpec.RespType)
+	var respValue, errValue reflect.Value
 
-	// Construct args slice for the method call
+	// Construct arguments for the method call
 	args := make([]reflect.Value, 0, 4)
 	args = append(args, serviceSpec.rcvr)
 	if methodSpec.wantsContext {
@@ -140,19 +143,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		args = append(args, reflect.ValueOf(r))
 	}
-	args = append(args, req, resp)
+	args = append(args, req)
+	if !methodSpec.returnsResp {
+		respValue = reflect.New(methodSpec.RespType)
+		args = append(args, respValue)
+	}
 
 	// Invoke the service method
-	errValue := methodSpec.method.Func.Call(args)
+	res := methodSpec.method.Func.Call(args)
+	if methodSpec.returnsResp {
+		respValue = res[0]
+		errValue = res[1]
+	} else {
+		errValue = res[0]
+	}
 
 	// Check if method returned an error
-	if err := errValue[0].Interface(); err != nil {
+	if err := errValue.Interface(); err != nil {
 		writeError(w, err.(error))
 		return
 	}
 
 	// Encode non-error response
-	if err := json.NewEncoder(w).Encode(resp.Interface()); err != nil {
+	if err := json.NewEncoder(w).Encode(respValue.Interface()); err != nil {
 		writeError(w, err)
 	}
 }
